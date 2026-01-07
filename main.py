@@ -1,4 +1,3 @@
-```
 import streamlit as st
 import cv2
 import numpy as np
@@ -80,4 +79,3 @@ if uploaded_file is not None:
             else:
                 st.warning("未偵測到任何目標，建議調整亮度或降低信心度門檻。")
 
-```

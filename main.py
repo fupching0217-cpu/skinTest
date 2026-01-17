@@ -3,12 +3,11 @@ import cv2
 import numpy as np
 from PIL import Image, ImageEnhance
 from ultralytics import YOLO
-import pandas as pd
 
 # --- 設定頁面標題 ---
-st.set_page_config(page_title="皮膚偵測比對系統", layout="wide")
-st.title("🔍 皮膚偵測與差異分析系統")
-st.write("請上傳兩張圖片（例如：治療前與治療後），系統將自動比對偵測目標的數量差異。")
+st.set_page_config(page_title="皮膚偵測 AI 系統", layout="wide")
+st.title("🔍 皮膚偵測與分析系統")
+st.write("上傳圖片並調整亮度，即可進行即時 AI 偵測")
 
 # --- 載入模型 (快取處理) ---
 @st.cache_resource
@@ -18,100 +17,65 @@ def load_model():
 model = load_model()
 
 # --- 側邊欄設定 ---
-st.sidebar.header("全域參數設定")
+st.sidebar.header("參數設定")
 brightness = st.sidebar.slider("圖片亮度調整", 0.5, 2.0, 1.0, 0.1)
 conf_threshold = st.sidebar.slider("AI 信心度門檻", 0.1, 1.0, 0.25, 0.05)
 
-# --- 定義偵測函式 ---
-def process_and_detect(uploaded_file, brightness, conf_threshold):
-    if uploaded_file is None:
-        return None, None, None
-    
-    # 1. 影像處理
+# --- 圖片上傳區域 ---
+uploaded_file = st.file_uploader("請選擇一張皮膚照片 (jpg, png, jpeg)...", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
     image = Image.open(uploaded_file)
+    
+    # 1. 調整亮度
     enhancer = ImageEnhance.Brightness(image)
     processed_image = enhancer.enhance(brightness)
     
-    # 2. 轉換為 OpenCV 格式
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("待測圖片 (已調亮度)")
+        st.image(processed_image, use_container_width=True)
+    
+    # 2. 進行 YOLOv8 偵測
     img_array = np.array(processed_image)
     img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
     
-    # 3. YOLO 偵測
-    results = model.predict(source=img_bgr, conf=conf_threshold)
-    
-    # 4. 取得畫框後的圖片
-    annotated_img = cv2.cvtColor(results[0].plot(), cv2.COLOR_BGR2RGB)
-    
-    # 5. 統計各類別數量
-    counts = {}
-    boxes = results[0].boxes
-    for box in boxes:
-        label = model.names[int(box.cls[0])]
-        counts[label] = counts.get(label, 0) + 1
-        
-    return annotated_img, counts, len(boxes)
-
-# --- 圖片上傳區域 (分兩欄) ---
-col_up1, col_up2 = st.columns(2)
-
-with col_up1:
-    st.subheader("圖片 A (參照組)")
-    file_a = st.file_uploader("選擇第一張照片...", type=["jpg", "jpeg", "png"], key="file_a")
-
-with col_up2:
-    st.subheader("圖片 B (對照組)")
-    file_b = st.file_uploader("選擇第二張照片...", type=["jpg", "jpeg", "png"], key="file_b")
-
-# --- 執行偵測與比對 ---
-if file_a and file_b:
-    if st.button("🚀 開始執行雙圖偵測與比對分析", use_container_width=True):
-        with st.spinner('AI 分析中...'):
-            # 分別偵測兩張圖片
-            img_a_res, counts_a, total_a = process_and_detect(file_a, brightness, conf_threshold)
-            img_b_res, counts_b, total_b = process_and_detect(file_b, brightness, conf_threshold)
+    if st.button("開始 AI 偵測"):
+        with st.spinner('AI 正在分析中...'):
+            results = model.predict(source=img_bgr, conf=conf_threshold)
             
-            # 顯示偵測結果圖
-            res_col1, res_col2 = st.columns(2)
-            with res_col1:
-                st.image(img_a_res, caption=f"圖片 A 偵測結果 (總計: {total_a})", use_container_width=True)
-            with res_col2:
-                st.image(img_b_res, caption=f"圖片 B 偵測結果 (總計: {total_b})", use_container_width=True)
+            # 取得畫好框的圖片
+            annotated_img = cv2.cvtColor(results[0].plot(), cv2.COLOR_BGR2RGB)
             
-            # --- 差異比對邏輯 ---
-            st.divider()
-            st.subheader("📊 目標差異分析報告")
+            with col2:
+                st.subheader("偵測結果圖")
+                st.image(annotated_img, use_container_width=True)
             
-            # 整合所有出現過的類別
-            all_labels = set(counts_a.keys()).union(set(counts_b.keys()))
+            # --- 新增：顯示偵測詳細數據 ---
+            st.divider() # 加入分隔線
+            st.subheader("📊 偵測數據明細")
             
-            comparison_data = []
-            for label in all_labels:
-                num_a = counts_a.get(label, 0)
-                num_b = counts_b.get(label, 0)
+            boxes = results[0].boxes
+            num_detections = len(boxes)
+            
+            if num_detections > 0:
+                # 建立資料清單
+                detection_data = []
+                for box in boxes:
+                    class_id = int(box.cls[0])
+                    label = model.names[class_id]  # 取得類別名稱
+                    conf = float(box.conf[0])      # 取得信心數值
+                    
+                    detection_data.append({
+                        "偵測目標": label,
+                        "信心指數": f"{conf:.2%}" # 轉為百分比格式
+                    })
                 
-                # 計算差異百分比 (以圖片 A 為基準)
-                if num_a > 0:
-                    diff_pct = ((num_b - num_a) / num_a) * 100
-                    diff_str = f"{diff_pct:+.2f}%"
-                else:
-                    diff_str = "新增目標" if num_b > 0 else "0%"
+                # 使用 Streamlit 表格呈現
+                st.success(f"偵測完成！共發現 {num_detections} 處目標。")
+                st.table(detection_data)
                 
-                comparison_data.append({
-                    "偵測目標": label,
-                    "圖片 A 數量": num_a,
-                    "圖片 B 數量": num_b,
-                    "差異程度 (B vs A)": diff_str
-                })
-            
-            # 使用表格呈現
-            if comparison_data:
-                df = pd.DataFrame(comparison_data)
-                st.table(df)
-                
-                # 額外數據總結
-                st.info(f"💡 分析總結：圖片 B 相較於圖片 A，總偵測數量由 {total_a} 變更為 {total_b}。")
             else:
-                st.warning("兩張圖片皆未偵測到任何目標。")
+                st.warning("未偵測到任何目標，建議調整亮度或降低信心度門檻。")
 
-elif file_a or file_b:
-    st.info("💡 請上傳兩張圖片以啟動比對功能。")
